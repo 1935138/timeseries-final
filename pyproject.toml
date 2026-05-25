@@ -1,0 +1,10 @@
+[project]
+name = "timeseries-final"
+version = "0.1.0"
+description = "KPX daily peak power load forecasting with ARIMAX/SARIMAX (2010-2025)"
+requires-python = ">=3.12"
+dependencies = [
+    "requests>=2.31",
+    "pandas>=2.0",
+    "python-dotenv>=1.0",
+]
