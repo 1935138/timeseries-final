@@ -7,4 +7,12 @@ dependencies = [
     "requests>=2.31",
     "pandas>=2.0",
     "python-dotenv>=1.0",
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "matplotlib>=3.8",
+    "seaborn>=0.13",
+    "statsmodels>=0.14",
+    "jupyter>=1.0",
+    "ipykernel>=6.29",
+    "python-docx>=1.1",
 ]
