@@ -38,7 +38,7 @@ warnings.filterwarnings("ignore")
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from model_arimax import SplitData, load_data, metrics
+from model_arimax import SplitData, load_data, metrics, pi_metrics
 
 ORDER = (1, 1, 2)
 SORDER = (1, 1, 1, 7)
@@ -129,8 +129,7 @@ def fit_eval(
         ci.iloc[:, 0] = np.exp(ci.iloc[:, 0] + var / 2)
         ci.iloc[:, 1] = np.exp(ci.iloc[:, 1] + var / 2)
 
-    in_ci = ((data.y_test.values >= ci.iloc[:, 0].values) &
-             (data.y_test.values <= ci.iloc[:, 1].values)).mean()
+    pim = pi_metrics(data.y_test.values, ci.iloc[:, 0].values, ci.iloc[:, 1].values, alpha=0.05)
 
     m = metrics(data.y_test, pred, label)
 
@@ -149,7 +148,10 @@ def fit_eval(
         "RMSE_2025": m["RMSE"],
         "MAPE_2025_%": m["MAPE_%"],
         "bias_2025": m["bias_mean"],
-        "PI95_cov_%": in_ci * 100,
+        "PI95_cov_%": pim["PICP_%"],
+        "PINAW": pim["PINAW"],
+        "CWC": pim["CWC"],
+        "Winkler": pim["Winkler"],
         "resid_skew": float(stats.skew(resid)),
         "resid_kurt": float(stats.kurtosis(resid)),
         "LB_p_lag10": lb.loc[10, "lb_pvalue"],
@@ -158,6 +160,25 @@ def fit_eval(
         "_pred": pred,
         "_ci": ci,
     }
+
+
+def rolling_one_step_log(data: SplitData, exog_names: list[str], res) -> pd.Series:
+    """log target 모델용 rolling 1-step. 매일 실측을 log 스케일로 append.
+    예측은 exp(μ + σ²/2)로 원 스케일 역변환."""
+    _, exog_test = std_exog(data, exog_names) if exog_names else (None, None)
+    var = res.params.get("sigma2", res.scale)
+
+    preds: list[float] = []
+    for i in range(len(data.y_test)):
+        ex_step = exog_test.iloc[[i]] if exog_test is not None else None
+        fc = res.get_forecast(steps=1, exog=ex_step)
+        mu = float(fc.predicted_mean.iloc[0])
+        preds.append(np.exp(mu + var / 2))
+        # 실측(log 스케일)을 append, refit 없이 상태만 갱신
+        y_log = np.log(data.y_test.iloc[[i]])
+        res = res.append(y_log, exog=ex_step, refit=False)
+
+    return pd.Series(preds, index=data.y_test.index, name="rolling")
 
 
 def main() -> None:
@@ -200,19 +221,31 @@ def main() -> None:
     cmp_df.to_csv(OUT_DIR / "v3_results.csv", index=False, encoding="utf-8-sig")
 
     print("\n=== 단계별 비교 ===")
-    show_cols = ["model", "n_exog", "AIC", "MAE_2025", "MAPE_2025_%", "PI95_cov_%",
+    show_cols = ["model", "n_exog", "AIC", "MAE_2025", "MAPE_2025_%",
+                 "PI95_cov_%", "PINAW", "CWC", "Winkler",
                  "resid_skew", "resid_kurt", "LB_p_lag10"]
     print(cmp_df[show_cols].round(3).to_string(index=False))
 
     # 최종 모델 예측 저장 (v3c)
     final = results[-1]
+
+    # rolling 1-step (log target → exp 역변환, 편향 보정)
+    print("\n[v3c rolling 1-step]")
+    rolling = rolling_one_step_log(data, v3c_exog, final["_fit_obj"])
+
     out = pd.DataFrame({
         "actual": data.y_test,
         "pred": final["_pred"].values,
         "ci_low": final["_ci"].iloc[:, 0].values,
         "ci_high": final["_ci"].iloc[:, 1].values,
+        "rolling": rolling.values,
     }, index=data.y_test.index)
     out.to_csv(OUT_DIR / "v3c_forecast.csv", encoding="utf-8-sig")
+
+    roll_err = data.y_test.values - rolling.values
+    roll_mae = np.abs(roll_err).mean()
+    roll_mape = (np.abs(roll_err) / data.y_test.values).mean() * 100
+    print(f"  rolling MAE={roll_mae:,.0f}, MAPE={roll_mape:.2f}%")
 
     # 계수 (v3c)
     print("\n=== v3c 외생변수 계수 ===")

@@ -34,6 +34,7 @@ from model_arimax import (
     forecast_oneshot,
     load_data,
     metrics,
+    pi_metrics,
 )
 
 ORDER = (1, 1, 2)
@@ -76,7 +77,7 @@ def main() -> None:
         res, info = fit_one(data, ORDER, SORDER, exog_names)
         pred, ci = forecast_oneshot(res, data, exog_names)
         m = metrics(data.y_test, pred, name)
-        in_ci = ((data.y_test >= ci.iloc[:, 0].values) & (data.y_test <= ci.iloc[:, 1].values)).mean()
+        pim = pi_metrics(data.y_test, ci.iloc[:, 0].values, ci.iloc[:, 1].values, alpha=0.05)
         rows.append({
             "subset": name,
             "n_exog": len(exog_names),
@@ -87,7 +88,10 @@ def main() -> None:
             "RMSE_2025": m["RMSE"],
             "MAPE_2025_%": m["MAPE_%"],
             "bias_2025": m["bias_mean"],
-            "PI95_cov_%": in_ci * 100,
+            "PI95_cov_%": pim["PICP_%"],
+            "PINAW": pim["PINAW"],
+            "CWC": pim["CWC"],
+            "Winkler": pim["Winkler"],
         })
 
     df = pd.DataFrame(rows).sort_values("MAE_2025").reset_index(drop=True)

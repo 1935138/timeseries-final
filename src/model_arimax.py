@@ -144,6 +144,49 @@ def metrics(y_true: pd.Series, y_pred: pd.Series, label: str) -> dict:
     }
 
 
+def pi_metrics(
+    y_true: pd.Series | np.ndarray,
+    ci_low: np.ndarray,
+    ci_high: np.ndarray,
+    alpha: float = 0.05,
+    eta: float = 50.0,
+) -> dict:
+    """예측구간(PI) 평가지표: PICP, PINAW, CWC, Winkler.
+
+    - PICP: coverage 비율 (1 - alpha 가 명목값)
+    - PINAW: 평균 구간폭 / (max - min) — 0에 가까울수록 sharp
+    - CWC (Khosravi et al. 2011): PINAW * (1 + γ * exp(-η*(PICP - μ)))
+        γ = 1 if PICP < μ else 0, μ = 1 - alpha
+    - Winkler (Interval) Score: proper scoring rule, 작을수록 좋음
+        width + (2/α) * max(0, ci_low - y) + (2/α) * max(0, y - ci_high), 평균
+    """
+    y = np.asarray(y_true, dtype=float)
+    lo = np.asarray(ci_low, dtype=float)
+    hi = np.asarray(ci_high, dtype=float)
+
+    inside = (y >= lo) & (y <= hi)
+    picp = inside.mean()
+
+    width = hi - lo
+    y_range = y.max() - y.min()
+    pinaw = width.mean() / y_range if y_range > 0 else np.nan
+
+    mu = 1.0 - alpha
+    gamma = 0.0 if picp >= mu else 1.0
+    cwc = pinaw * (1.0 + gamma * np.exp(-eta * (picp - mu)))
+
+    below = np.maximum(0.0, lo - y)
+    above = np.maximum(0.0, y - hi)
+    winkler = (width + (2.0 / alpha) * (below + above)).mean()
+
+    return {
+        "PICP_%": picp * 100,
+        "PINAW": pinaw,
+        "CWC": cwc,
+        "Winkler": winkler,
+    }
+
+
 def forecast_oneshot(res, data: SplitData, exog_names: list[str]) -> pd.Series:
     _, exog_test = data.std_exog(exog_names)
     fc = res.get_forecast(steps=len(data.y_test), exog=exog_test)
@@ -251,9 +294,12 @@ def main() -> None:
         metrics(data.y_test, naive, "Naive (전일)"),
         metrics(data.y_test, snaive, "Seasonal Naive (전주 동요일)"),
     ]
-    # 95% PI 커버리지
-    in_ci = ((data.y_test >= ci.iloc[:, 0].values) & (data.y_test <= ci.iloc[:, 1].values)).mean()
-    rows[0]["PI95_cov_%"] = in_ci * 100
+    # 95% PI 평가지표 (PICP / PINAW / CWC / Winkler)
+    pim = pi_metrics(data.y_test, ci.iloc[:, 0].values, ci.iloc[:, 1].values, alpha=0.05)
+    rows[0]["PI95_cov_%"] = pim["PICP_%"]
+    rows[0]["PINAW"] = pim["PINAW"]
+    rows[0]["CWC"] = pim["CWC"]
+    rows[0]["Winkler"] = pim["Winkler"]
 
     metrics_df = pd.DataFrame(rows)
     metrics_df.to_csv(OUT_DIR / "metrics.csv", index=False, encoding="utf-8-sig")
